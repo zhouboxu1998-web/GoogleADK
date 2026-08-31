@@ -1,105 +1,105 @@
 import os
 from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
-from google.adk.sessions import InMemorySessionService
+from google.adk.sessions import InMemorySessionService,Session
 from google.adk.runners import Runner
 from google.genai import types
-from typing import Optional,Dict,Any
+from typing import Optional, Dict, Any
 
 import warnings
 warnings.filterwarnings("ignore")
-
 import logging
 logging.basicConfig(level=logging.CRITICAL)
 
 print("Libraries imported")
 
 
-
 class AgentCaller:
-    def __init__(self, agent: Agent, runner: Runner, user_id: str, session_id: str, verbose: bool = False):
+    def __init__(self,agent: Agent,runner: Runner,user_id: str,session_id: str,session_service: InMemorySessionService,
+        app_name: Optional[str] = None,
+    ):
         """
         初始化 Agent 调用器
         """
-        self.verbose = verbose
+        # 如果 app_name 未提供，则使用 agent.name
+        self.app_name = app_name if app_name else agent.name
         self.agent = agent
-        # 如果不传参数，就自动根据 agent 的名字生成默认 ID
-        self.app_name = app_name
         self.user_id = user_id
         self.session_id = session_id
         self.runner = runner
-
-        # 实例化基础服务
-        self.session_service = InMemorySessionService()
+        # 使用外部传入的同一个 session_service，避免状态不一致
+        self.session_service = session_service
 
         # 内部状态标志，用于确保只创建一次 Session
-        self._session_created = False
 
-    async def chat(self, user_input: str) -> str:
-        """
-        发送消息并获取 Agent 的回复
-        """
-        # 1. 确保在第一次聊天时创建好 Session
-        if not self._session_created:
-            await self.session_service.create_session(
-                app_name=self.app_name,
-                user_id=self.user_id,
-                session_id=self.session_id
-            )
-            self._session_created = True
 
+    async def chat(self, user_input: str, verbose: bool = False) -> str:
         print(f"\n>>>👤 用户: {user_input}")
-        if self.verbose:
+        if verbose:
             print("\n🤖 Agent 正在思考并执行中...\n")
 
-        # 2. 组装输入消息
         message = types.Content(role='user', parts=[types.Part(text=user_input)])
         final_response_text = "智能体没有生成最终响应"
 
-        # 3. 异步运行 Agent，抓取事件流
-        async for event in self.runner.run_async(user_id=self.user_id, session_id=self.session_id, new_message=message):
+        async for event in self.runner.run_async(
+                user_id=self.user_id, session_id=self.session_id, new_message=message
+        ):
+            if verbose:
+                is_final = event.is_final_response()  # 调用方法
+                print(
+                    f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {is_final}, Content: {event.content}")
 
-            # 调试模式打印所有事件详情
-            if self.verbose:
-                is_final = getattr(event, "is_final_response", False)
-                print(f"  [Event] Author: {getattr(event, 'author', 'N/A')}, Type: {type(event).__name__}, Final: {is_final}, Content: {getattr(event, 'content', 'N/A')}")
-
-            # 4. 提取最终的回复内容
-            if getattr(event, "is_final_response", False):
-                if getattr(event, "content", None) and event.content.parts:
-                    final_response_text = event.content.parts[0].text
-                elif getattr(event, "actions", None) and getattr(event.actions, "escalate", None):
+            if event.is_final_response():
+                # 尝试从 content.parts 中提取文本
+                if event.content and event.content.parts:
+                    for part in event.content.parts:
+                        if getattr(part, "text", None):
+                            final_response_text = part.text
+                            break
+                # 如果是升级事件
+                elif event.actions and event.actions.escalate:
                     final_response_text = f"Agent escalated: {getattr(event, 'error_message', 'No specific message')}"
-
-                # 抓到最终回复后，直接跳出循环
                 break
-
+        self.session = self.runner.session_service.get_session(app_name=self.runner.app_name, user_id=self.user_id, session_id=self.session_id)
         print(f"<<< Agent Response: {final_response_text}\n")
         return final_response_text
 
-async def make_agent_caller(agent: Agent,                                  # 指定必须传一个 Agent 对象
+    def get_session(self):
+        return self.runner.session_service.get_session(app_name=self.runner.app_name, user_id=self.user_id, session_id=self.session_id)
+
+
+async def make_agent_caller(
+    agent: Agent,
     app_name: Optional[str] = None,
-    initial_state: Optional[Dict[str, Any]] = None) -> AgentCaller:
-    # 1. 搞定名字
+    initial_state: Optional[Dict[str, Any]] = None,
+) -> AgentCaller:
+    """
+    创建 AgentCaller 实例，准备好 runner 和 session_service。
+    """
+    # 1. 确定名字
     app_name = app_name or f"{agent.name}_app"
     user_id = f"{agent.name}_user"
     session_id = f"{agent.name}_session"
-
-    # 2. 搞定异步的会话创建（把需要 await 的脏活累活全在这里做完）
     session_service = InMemorySessionService()
+    # Initialize a session
     await session_service.create_session(
         app_name=app_name,
         user_id=user_id,
         session_id=session_id,
         state=initial_state
     )
-
-    # 3. 组装 Runner
     runner = Runner(
         app_name=app_name,
         agent=agent,
-        session_service=session_service
+        session_service=session_service,
     )
 
-    # 4. 关键：把准备好的东西塞进对象里，并返回这个完美的对象！
-    return AgentCaller(agent=agent, runner=runner, user_id=user_id, session_id=session_id)
+    # 3. 返回 AgentCaller，由它负责在首次聊天时创建 session
+    return AgentCaller(
+        agent=agent,
+        runner=runner,
+        user_id=user_id,
+        session_id=session_id,
+        session_service=session_service,
+        app_name=app_name,
+    )
