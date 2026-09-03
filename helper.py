@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv, find_dotenv
 from google.adk.agents import Agent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.sessions import InMemorySessionService,Session
@@ -12,6 +13,16 @@ import logging
 logging.basicConfig(level=logging.CRITICAL)
 
 print("Libraries imported")
+
+def load_env():
+    _ = load_dotenv(find_dotenv())
+
+def get_neo4j_import_dir():
+    """Gets the neo4j import directory from an environment variable
+    """
+    load_env()
+    neo4j_import_dir = os.getenv("NEO4J_IMPORT_DIR")
+    return neo4j_import_dir
 
 
 class AgentCaller:
@@ -60,7 +71,7 @@ class AgentCaller:
                 elif event.actions and event.actions.escalate:
                     final_response_text = f"Agent escalated: {getattr(event, 'error_message', 'No specific message')}"
                 break
-        self.session = self.runner.session_service.get_session(app_name=self.runner.app_name, user_id=self.user_id, session_id=self.session_id)
+        self.session = await self.runner.session_service.get_session(app_name=self.runner.app_name, user_id=self.user_id, session_id=self.session_id)
         print(f"<<< Agent Response: {final_response_text}\n")
         return final_response_text
 
