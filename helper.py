@@ -67,9 +67,8 @@ class AgentCaller:
                         if getattr(part, "text", None):
                             final_response_text = part.text
                             break
-                # 如果是升级事件
-                elif event.actions and event.actions.escalate:
-                    final_response_text = f"Agent escalated: {getattr(event, 'error_message', 'No specific message')}"
+            # 如果是升级事件
+            if getattr(event, "actions", None) and getattr(event.actions, "escalate", False):
                 break
         self.session = await self.runner.session_service.get_session(app_name=self.runner.app_name, user_id=self.user_id, session_id=self.session_id)
         print(f"<<< Agent Response: {final_response_text}\n")
